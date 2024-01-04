@@ -71,7 +71,9 @@ async def get_service_region_endpoint_map(http_client: aiohttp.ClientSession):
     )
 
 
-BUNDLED_SERVICE_REGION_ENDPOINT_MAP_PATH = pathlib.Path(__file__).parent.parent / 'endpoints.json'
+BUNDLED_SERVICE_REGION_ENDPOINT_MAP_PATH = (
+    pathlib.Path(__file__).parent.parent / 'bundled' / 'endpoints.json'
+)
 
 
 def get_bundled_service_region_endpoint_map():

@@ -15,7 +15,7 @@ from cryptography.hazmat.primitives.asymmetric import padding
 from cryptography.hazmat.primitives.asymmetric.types import rsa
 from cryptography.hazmat.primitives.hashes import SHA256
 
-from oci_client import _helpers, _services
+from oci_client import _helpers, _services, cfg
 
 
 class HttpMethod(enum.Enum):
@@ -91,40 +91,54 @@ def _get_required_headers(request: Request) -> typing.Iterator[tuple[str, str]]:
 
 @dataclasses.dataclass
 class Client:
-    tenant: str
-    user: str
-    fingerprint: str
-    rsa_private_key: rsa.RSAPrivateKey
+    tenant_id: str
+    user_id: str
+    api_key_fingerprint: str
+    api_key_private_rsa: rsa.RSAPrivateKey
     service_endpoints: dict[str, pydantic.HttpUrl]
     region: str
     http_client: aiohttp.ClientSession
 
     @classmethod
     @contextlib.asynccontextmanager
-    async def make(
-        cls,
-        *,
-        tenant: str,
-        user: str,
-        fingerprint: str,
-        region: str,
-        pem_private_key: _helpers.ConvertableToBytes,
-    ):
-        private_key = serialization.load_pem_private_key(
-            _helpers.get_bytes(pem_private_key, encoding='ascii'), None
+    async def from_config(cls, config: cfg.Config):
+        api_private_key = serialization.load_pem_private_key(
+            _helpers.get_bytes(config.api_key.pem_private_key, encoding='ascii'), None
         )
-        assert isinstance(private_key, rsa.RSAPrivateKey)
+        assert isinstance(api_private_key, rsa.RSAPrivateKey)
         async with _helpers.make_http_client() as http_client:
             yield cls(
-                tenant=tenant,
-                user=user,
-                fingerprint=fingerprint,
-                rsa_private_key=private_key,
-                region=region,
-                service_endpoints=get_bundled_service_endpoints(region)
-                | await try_get_hosted_service_endpoints(http_client, region),
+                tenant_id=config.tenant_id,
+                user_id=config.user_id,
+                api_key_fingerprint=config.api_key.fingerprint,
+                api_key_private_rsa=api_private_key,
+                region=config.region,
+                service_endpoints=get_bundled_service_endpoints(config.region)
+                | await try_get_hosted_service_endpoints(http_client, config.region),
                 http_client=http_client,
             )
+
+    @classmethod
+    @contextlib.asynccontextmanager
+    async def new(
+        cls,
+        region: str,
+        tenant_id: str,
+        user_id: str,
+        api_key_fingerprint: str,
+        api_key_pem_private_key: bytes,
+    ):
+        async with cls.from_config(
+            cfg.Config(
+                region=region,
+                tenant_id=tenant_id,
+                user_id=user_id,
+                api_key=cfg.ApiKey(
+                    fingerprint=api_key_fingerprint, pem_private_key=api_key_pem_private_key
+                ),
+            )
+        ) as client:
+            yield client
 
     def _get_signature(self, required_headers: dict[str, str]):
         return 'Signature ' + ','.join(
@@ -133,9 +147,9 @@ class Client:
                 'algorithm': 'rsa-sha256',
                 'version': 1,
                 'headers': ' '.join(required_headers),
-                'keyId': f'{self.tenant}/{self.user}/{self.fingerprint}',
+                'keyId': f'{self.tenant_id}/{self.user_id}/{self.api_key_fingerprint}',
                 'signature': base64.b64encode(
-                    self.rsa_private_key.sign(
+                    self.api_key_private_rsa.sign(
                         '\n'.join(f'{k}: {v}' for (k, v) in required_headers.items()).encode(
                             'ascii'
                         ),
